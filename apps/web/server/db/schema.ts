@@ -11,7 +11,7 @@ import {
 import type { AdapterAccountType } from "next-auth/adapters";
 
 export const createTable = sqliteTableCreator((name) => `${name}`);
-
+console.log("hi")
 export const users = createTable(
 	"user",
 	{

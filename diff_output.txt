@@ -1,0 +1,4334 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+index 61a3bb7..15394cb 100644
+--- a/.vscode/settings.json
++++ b/.vscode/settings.json
+@@ -2,6 +2,6 @@
+ 	"css.validate": false,
+ 	"editor.quickSuggestions": {
+ 		"strings": true
+-  },
+-  "typescript.tsdk": "node_modules/typescript/lib"
++	},
++	"typescript.tsdk": "node_modules/typescript/lib"
+ }
+diff --git a/SETUP-GUIDE.md b/SETUP-GUIDE.md
+index 1ebff77..7205293 100644
+--- a/SETUP-GUIDE.md
++++ b/SETUP-GUIDE.md
+@@ -1,81 +1,134 @@
+-# Setup guide
++# Self Hosting Guide
++
++This guide will help you set up your own instance of Supermemory. This is neccessary if you want to contribute to the project or if you want to self host the project. You can read more about the stack [here](https://github.com/supermemoryai/supermemory/?tab=readme-ov-file#-the-stack).
+ 
+ ## Prerequisites
+ 
+ - [bun](https://bun.sh/)
+ - [turbo](https://turbo.build/repo/docs/installing)
+ - [wrangler](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
++- [yarn](https://yarnpkg.com/getting-started/install): yarn is required to run scripts using turborepo. bun is not supported by turborepo yet vercel/turbo#4762
++- [Cloudflare Workers](https://developers.cloudflare.com/workers/platform/pricing/): You also need to have a paid Workers plan to use the vectorize feature which is needed run the AI backend. It is currently $5/mo + usage costs.
++- [Cloudflare R2](https://developers.cloudflare.com/r2/): You need to enable R2 in the Cloudflare Dashboard for use in the web app.
+ 
+ ## Steps
+ 
+ 1. Clone the repo
+ 2. Run `bun install` in the root directory
+-3. Create a `.dev.vars` file in `apps/web` with the following content:
++
++### web
++
++1. You need to create OAuth credentials for Google which is need for auth.js (nextauth). Visit https://developers.google.com/identity/protocols/oauth2 to learn more and https://console.cloud.google.com/apis/dashboard to create a new project and OAuth credentials. You need to set the redirect URL to `http://localhost:3000/api/auth/callback/google` for development. You can also set the redirect URL to your own domain if you are deploying the app.
++2. Create a `.dev.vars` file in `apps/web` with the following content:
+ 
+ ```bash
+-GOOGLE_CLIENT_ID="-" // required, visit https://developers.google.com/identity/protocols/oauth2
+-GOOGLE_CLIENT_SECRET="-" // required
+-NEXTAUTH_SECRET='nextauthsecret'
++GOOGLE_CLIENT_ID="" // required
++GOOGLE_CLIENT_SECRET="" // required
++NEXTAUTH_SECRET="" // generate by running `openssl rand -base64 32`
+ DATABASE_URL='database.sqlite'
+ NEXTAUTH_URL='http://localhost:3000'
+-BACKEND_SECURITY_KEY='veryrandomsecuritykey'
+-BACKEND_BASE_URL="where your backend is hosted"
++BACKEND_SECURITY_KEY="" // used to authenticate with the backend. generate a random string using `openssl rand -base64 32`
++BACKEND_BASE_URL="http://localhost:8686"
++```
++
++> [!NOTE]
++> The `BACKEND_SECURITY_KEY` should be the same as the `SECURITY_KEY` in the `.dev.vars` file in `apps/cf-ai-backend`.
++
++3. KV Namespaces
++
++```bash
++bunx wrangler kv namespace create canvas-snaps
+ ```
+ 
+-4. Setup the database:
++```bash
++bunx wrangler kv namespace create recommendations
++```
+ 
+-First, edit the `wrangler.toml` file in `apps/web` to point the d1 database to your account.
++Do not change the binding value in the `wrangler.toml` but update the id for the namespaces with the values you get from the above commands.
+ 
+-You can create a d1 database by running this command
++4. R2 Storage
+ 
++```bash
++bunx wrangler r2 bucket create supermemory-r2
+ ```
+-bunx wrangler d1 create <YOUR_DATABASE_NAME>
++
++Update bucket_name in the `wrangler.toml` file in `apps/web` to `supermemory-r2`
++
++5. D1 Database
++
++```bash
++bunx wrangler d1 create supermemory-db-prod
++```
++
++Update the database_name and database_id in `[[env.production.d1_databases]]` with the values you get from the above command.
++
++```bash
++bunx wrangler d1 create supermemory-db-preview
+ ```
+ 
+-And then replace database_name and database_id with the values
++Update the database_name and database_id in `[[d1_databases]]` and `[[env.preview.d1_databases]]` with the values you get from the above command.
+ 
+ > [!NOTE]
+ > please don't change the binding value even if wrangler cli suggests you to do so.
+ 
+-```
++```bash
+ [[d1_databases]]
+ binding = "DATABASE"
+-database_name = "YOUR_DATABASE_NAME"
++database_name = "supermemory-db-preview"
+ database_id = "YOUR_DB_ID"
+ ```
+ 
+ Simply run this command in `apps/web`
+ 
+-```
+-bunx wrangler d1 migrations apply <YOUR_DATABASE_NAME>
++```bash
++bunx wrangler d1 migrations apply supermemory-db-preview
+ ```
+ 
+-If it runs, you can set up the cloud database as well by removing the `--local` flag,
++If it runs, you can set up the cloud database as well by add the `--remote` flag,
+ 
+ if you just want to contribute to frontend then just run `bun run dev` in the root of the project and done! (you won't be able to try ai stuff), otherwise continue...
+ 
+-5. You need to host your own worker for the `apps/cf-ai-backend` module.
++### cf-ai-backend
++
++1. You need to host your own worker for the `apps/cf-ai-backend` module.
+ 
+ To do this, first edit the `.dev.vars` file in `apps/cf-ai-backend` with the following content:
+ 
+ ```bash
+-SECURITY_KEY="veryrandomsecuritykey"
++SECURITY_KEY="veryrandomsecuritykey" // same as BACKEND_SECURITY_KEY in web
+ // Why? to generate embeddings with 4000+ tokens
+ OPENAI_API_KEY="sk-"
+ ```
+ 
+-6. Run this command to initialise vector database
++2. Run this command to initialise vector database
+    > Note: You need to use the workers paid plan to use vectorize for now.
+ 
++```bash
++bunx wrangler vectorize create --dimensions=1536 supermemory --metric=cosine
++```
++
++Update the index_name for `[[vectorize]]` in `wrangler.toml` file in `apps/cf-ai-backend` with the `supermemory` or the name you used in the above command.
++
++3. Create KV namespaces for the `cf-ai-backend` module
++
++```bash
++bunx wrangler kv namespace create prod
+ ```
+-wrangler vectorize create --dimensions=1536 supermem-vector-1 --metric=cosine
++
++Update the id in `[[kv_namespaces]]` in the `wrangler.toml` file in `apps/cf-ai-backend` with the value you get from the above command.
++
++```bash
++bunx wrangler kv namespace create preview
+ ```
+ 
+-7. Change the `wrangler.toml` file in `apps/cf-ai-backend` to point to your KV namespace
++Update the preview_id in `[[kv_namespaces]]` in the `wrangler.toml` file in `apps/cf-ai-backend` with the value you get from the above command.
+ 
+-8. Run `bun dev` in the root directory and Voila! You have your own supermemory instance running!
++## Local Development
+ 
+-> Note: You need to replace the url `https://cf-ai-backend.dhr.wtf` everywhere with your own url for the cf-ai-backend module.
++- Run `bun dev` in the root directory and Voila! You have your own supermemory instance running!
++
++> [!NOTE]
++> It sometimes takes multiple tries to successfully run the `bun dev` command. If you encounter any issues, try running the command again.
+ 
+ ## Deploying
+ 
+diff --git a/apps/cf-ai-backend/src/helper.ts b/apps/cf-ai-backend/src/helper.ts
+index c54dde9..3a15ac4 100644
+--- a/apps/cf-ai-backend/src/helper.ts
++++ b/apps/cf-ai-backend/src/helper.ts
+@@ -1,5 +1,5 @@
+ import { Context } from "hono";
+-import { Env, vectorObj } from "./types";
++import { Env, vectorObj, Chunks } from "./types";
+ import { CloudflareVectorizeStore } from "@langchain/cloudflare";
+ import { OpenAIEmbeddings } from "./utils/OpenAIEmbedder";
+ import { createOpenAI } from "@ai-sdk/openai";
+@@ -7,6 +7,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
+ import { createAnthropic } from "@ai-sdk/anthropic";
+ import { z } from "zod";
+ import { seededRandom } from "./utils/seededRandom";
++import { bulkInsertKv } from "./utils/kvBulkInsert";
+ 
+ export async function initQuery(
+ 	c: Context<{ Bindings: Env }>,
+@@ -135,7 +136,7 @@ export async function batchCreateChunksAndEmbeddings({
+ }: {
+ 	store: CloudflareVectorizeStore;
+ 	body: z.infer<typeof vectorObj>;
+-	chunks: string[];
++	chunks: Chunks;
+ 	context: Context<{ Bindings: Env }>;
+ }) {
+ 	//! NOTE that we use #supermemory-web to ensure that
+@@ -150,15 +151,25 @@ export async function batchCreateChunksAndEmbeddings({
+ 
+ 	const allIds = await context.env.KV.list({ prefix: uuid });
+ 
+-	let pageContent = "";
+ 	// If some chunks for that content already exist, we'll just update the metadata to include
+ 	// the user.
+ 	if (allIds.keys.length > 0) {
+ 		const savedVectorIds = allIds.keys.map((key) => key.name);
+-		const vectors = await context.env.VECTORIZE_INDEX.getByIds(savedVectorIds);
+-
++		const vectors = [];
++		//Search in a batch of 20
++		for (let i = 0; i < savedVectorIds.length; i += 20) {
++			const batch = savedVectorIds.slice(i, i + 20);
++			const batchVectors = await context.env.VECTORIZE_INDEX.getByIds(batch);
++			vectors.push(...batchVectors);
++		}
++		console.log(
++			vectors.map((vector) => {
++				return vector.id;
++			}),
++		);
+ 		// Now, we'll update all vector metadatas with one more userId and all spaceIds
+ 		const newVectors = vectors.map((vector) => {
++			console.log(JSON.stringify(vector.metadata));
+ 			vector.metadata = {
+ 				...vector.metadata,
+ 				[`user-${body.user}`]: 1,
+@@ -169,51 +180,183 @@ export async function batchCreateChunksAndEmbeddings({
+ 					return acc;
+ 				}, {}),
+ 			};
+-			const content =
+-				vector.metadata.content.toString().split("Content: ")[1] ||
+-				vector.metadata.content;
+-			pageContent += `<---chunkId: ${vector.id}\n${content}\n---->`;
+ 			return vector;
+ 		});
+ 
+-		await context.env.VECTORIZE_INDEX.upsert(newVectors);
+-		return pageContent; //Return the page content that goes to d1 db
++		// upsert in batch of 20
++		const results = [];
++		for (let i = 0; i < newVectors.length; i += 20) {
++			results.push(newVectors.slice(i, i + 20));
++			console.log(JSON.stringify(newVectors[1].id));
++		}
++
++		await Promise.all(
++			results.map((result) => {
++				return context.env.VECTORIZE_INDEX.upsert(result);
++			}),
++		);
++		return;
+ 	}
+ 
+-	for (let i = 0; i < chunks.length; i++) {
+-		const chunk = chunks[i];
+-		const chunkId = `${uuid}-${i}`;
++	switch (chunks.type) {
++		case "tweet":
++			{
++				const commonMetaData = {
++					type: body.type ?? "tweet",
++					title: body.title,
++					description: body.description ?? "",
++					url: body.url,
++					[sanitizeKey(`user-${body.user}`)]: 1,
++				};
+ 
+-		const newPageContent = `Title: ${body.title}\nDescription: ${body.description}\nURL: ${body.url}\nContent: ${chunk}`;
++				const spaceMetadata = body.spaces?.reduce((acc, space) => {
++					acc[`space-${body.user}-${space}`] = 1;
++					return acc;
++				}, {});
+ 
+-		const docs = await store.addDocuments(
+-			[
+-				{
+-					pageContent: newPageContent,
+-					metadata: {
+-						title: body.title?.slice(0, 50) ?? "",
+-						description: body.description ?? "",
+-						url: body.url,
+-						type: body.type ?? "page",
+-						content: newPageContent,
+-
+-						[sanitizeKey(`user-${body.user}`)]: 1,
+-						...body.spaces?.reduce((acc, space) => {
+-							acc[`space-${body.user}-${space}`] = 1;
+-							return acc;
+-						}, {}),
+-					},
+-				},
+-			],
++				const ids = [];
++				const preparedDocuments = chunks.chunks
++					.map((tweet, i) => {
++						return tweet.chunkedTweet.map((chunk) => {
++							const id = `${uuid}-${i}`;
++							ids.push(id);
++							const { tweetLinks, tweetVids, tweetId, tweetImages } =
++								tweet.metadata;
++							return {
++								pageContent: chunk,
++								metadata: {
++									links: tweetLinks,
++									videos: tweetVids,
++									tweetId: tweetId,
++									tweetImages: tweetImages,
++									...commonMetaData,
++									...spaceMetadata,
++								},
++							};
++						});
++					})
++					.flat();
++
++				const docs = await store.addDocuments(preparedDocuments, {
++					ids: ids,
++				});
++				console.log("these are the doucment ids", ids);
++				console.log("Docs added:", docs);
++				const { CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID } =
++					context.env;
++				await bulkInsertKv(
++					{ CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID },
++					{ chunkIds: ids, urlid: ourID },
++				);
++			}
++			break;
++		case "page":
+ 			{
+-				ids: [chunkId],
+-			},
+-		);
++				const commonMetaData = {
++					type: body.type ?? "page",
++					title: body.title,
++					description: body.description ?? "",
++					url: body.url,
++					[sanitizeKey(`user-${body.user}`)]: 1,
++				};
++				const spaceMetadata = body.spaces?.reduce((acc, space) => {
++					acc[`space-${body.user}-${space}`] = 1;
++					return acc;
++				}, {});
+ 
+-		console.log("Docs added: ", docs);
++				const ids = [];
++				const preparedDocuments = chunks.chunks.map((chunk, i) => {
++					const id = `${uuid}-${i}`;
++					ids.push(id);
++					return {
++						pageContent: chunk,
++						metadata: {
++							...commonMetaData,
++							...spaceMetadata,
++						},
++					};
++				});
+ 
+-		await context.env.KV.put(chunkId, ourID);
+-		pageContent += `<---chunkId: ${chunkId}\n${chunk}\n---->`;
++				const docs = await store.addDocuments(preparedDocuments, { ids: ids });
++				console.log("Docs added:", docs);
++				const { CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID } =
++					context.env;
++				await bulkInsertKv(
++					{ CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID },
++					{ chunkIds: ids, urlid: ourID },
++				);
++			}
++			break;
++		case "note":
++			{
++				const commonMetaData = {
++					type: body.type ?? "page",
++					description: body.description ?? "",
++					url: body.url,
++					[sanitizeKey(`user-${body.user}`)]: 1,
++				};
++				const spaceMetadata = body.spaces?.reduce((acc, space) => {
++					acc[`space-${body.user}-${space}`] = 1;
++					return acc;
++				}, {});
++
++				const ids = [];
++				const preparedDocuments = chunks.chunks.map((chunk, i) => {
++					const id = `${uuid}-${i}`;
++					ids.push(id);
++					return {
++						pageContent: chunk,
++						metadata: {
++							...commonMetaData,
++							...spaceMetadata,
++						},
++					};
++				});
++
++				const docs = await store.addDocuments(preparedDocuments, { ids: ids });
++				console.log("Docs added:", docs);
++				const { CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID } =
++					context.env;
++				await bulkInsertKv(
++					{ CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID },
++					{ chunkIds: ids, urlid: ourID },
++				);
++			}
++			break;
++		case "image": {
++			const commonMetaData = {
++				type: body.type ?? "image",
++				title: body.title,
++				description: body.description ?? "",
++				url: body.url,
++				[sanitizeKey(`user-${body.user}`)]: 1,
++			};
++			const spaceMetadata = body.spaces?.reduce((acc, space) => {
++				acc[`space-${body.user}-${space}`] = 1;
++				return acc;
++			}, {});
++
++			const ids = [];
++			const preparedDocuments = chunks.chunks.map((chunk, i) => {
++				const id = `${uuid}-${i}`;
++				ids.push(id);
++				return {
++					pageContent: chunk,
++					metadata: {
++						...commonMetaData,
++						...spaceMetadata,
++					},
++				};
++			});
++
++			const docs = await store.addDocuments(preparedDocuments, { ids: ids });
++			console.log("Docs added:", docs);
++			const { CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID } = context.env;
++			await bulkInsertKv(
++				{ CF_KV_AUTH_TOKEN, CF_ACCOUNT_ID, KV_NAMESPACE_ID },
++				{ chunkIds: ids, urlid: ourID },
++			);
++		}
+ 	}
+-	return pageContent; // Return the pageContent  that goes to the d1 db
++	return;
+ }
+diff --git a/apps/cf-ai-backend/src/index.ts b/apps/cf-ai-backend/src/index.ts
+index edfe31c..a3ac138 100644
+--- a/apps/cf-ai-backend/src/index.ts
++++ b/apps/cf-ai-backend/src/index.ts
+@@ -1,7 +1,15 @@
+ import { z } from "zod";
+ import { Hono } from "hono";
+ import { CoreMessage, generateText, streamText, tool } from "ai";
+-import { chatObj, Env, vectorObj } from "./types";
++import {
++	chatObj,
++	Chunks,
++	Env,
++	ImageChunks,
++	PageOrNoteChunks,
++	TweetChunks,
++	vectorObj,
++} from "./types";
+ import {
+ 	batchCreateChunksAndEmbeddings,
+ 	deleteDocument,
+@@ -15,6 +23,8 @@ import { zValidator } from "@hono/zod-validator";
+ import chunkText from "./utils/chonker";
+ import { systemPrompt, template } from "./prompts/prompt1";
+ import { swaggerUI } from "@hono/swagger-ui";
++import { chunkThread } from "./utils/chunkTweet";
++import { chunkNote, chunkPage } from "./utils/chunkPageOrNotes";
+ 
+ const app = new Hono<{ Bindings: Env }>();
+ 
+@@ -59,42 +69,42 @@ app.get("/api/health", (c) => {
+ });
+ 
+ app.post("/api/add", zValidator("json", vectorObj), async (c) => {
+-	const body = c.req.valid("json");
++	try {
++		const body = c.req.valid("json");
+ 
+-	const { store } = await initQuery(c);
++		const { store } = await initQuery(c);
+ 
+-	console.log(body.spaces);
++		console.log(body.spaces);
++		let chunks: TweetChunks | PageOrNoteChunks;
++		// remove everything in <raw> tags
++		const newPageContent = body.pageContent?.replace(/<raw>.*?<\/raw>/g, "");
+ 
+-	// remove everything in <raw> tags
+-	const newPageContent = body.pageContent?.replace(/<raw>.*?<\/raw>/g, "");
++		switch (body.type) {
++			case "tweet":
++				chunks = chunkThread(newPageContent);
++				break;
+ 
+-	const chunks = chunkText(newPageContent, 1536);
++			case "page":
++				chunks = chunkPage(newPageContent);
++				break;
+ 
+-	const chunksOf20 = chunks.reduce((acc, chunk, index) => {
+-		if (index % 20 === 0) {
+-			acc.push([chunk]);
+-		} else {
+-			acc[acc.length - 1].push(chunk);
++			case "note":
++				chunks = chunkNote(newPageContent);
++				break;
+ 		}
+-		return acc;
+-	}, [] as string[][]);
+-
+-	const accumChunkedInputs = [];
+ 
+-	const promises = chunksOf20.map(async (chunkGroup) => {
+-		const chunkedInput = await batchCreateChunksAndEmbeddings({
++		await batchCreateChunksAndEmbeddings({
+ 			store,
+ 			body,
+-			chunks: chunkGroup,
++			chunks: chunks,
+ 			context: c,
+ 		});
+ 
+-		accumChunkedInputs.push(chunkedInput);
+-	});
+-
+-	await Promise.all(promises);
+-
+-	return c.json({ status: "ok", chunkedInput: accumChunkedInputs });
++		return c.json({ status: "ok" });
++	} catch (error) {
++		console.error("Error processing request:", error);
++		return c.json({ status: "error", message: error.message }, 500);
++	}
+ });
+ 
+ app.post(
+@@ -147,6 +157,13 @@ app.post(
+ 		);
+ 
+ 		const imageDescriptions = await Promise.all(imagePromises);
++		const chunks: ImageChunks = {
++			type: "image",
++			chunks: [
++				imageDescriptions,
++				...(body.text ? chunkText(body.text, 1536) : []),
++			].flat(),
++		};
+ 
+ 		await batchCreateChunksAndEmbeddings({
+ 			store,
+@@ -162,10 +179,7 @@ app.post(
+ 				pageContent: imageDescriptions.join("\n"),
+ 				title: "Image content from the web",
+ 			},
+-			chunks: [
+-				imageDescriptions,
+-				...(body.text ? chunkText(body.text, 1536) : []),
+-			].flat(),
++			chunks: chunks,
+ 			context: c,
+ 		});
+ 
+@@ -263,7 +277,7 @@ app.post(
+ 		// This is a "router". this finds out if the user wants to add a document, or chat with the AI to get a response.
+ 		const routerQuery = await generateText({
+ 			model: model,
+-			system: `You are Supermemory chatbot. You can either add a document to the supermemory database, or return a chat response. Based on this query, 
++			system: `You are Supermemory chatbot. You can either add a document to the supermemory database, or return a chat response. Based on this query,
+         You must determine what to do. Basically if it feels like a "question", then you should intiate a chat. If it feels like a "command" or feels like something that could be forwarded to the AI, then you should add a document.
+         You must also extract the "thing" to add and what type of thing it is.`,
+ 			prompt: `Question from user: ${query}`,
+@@ -289,7 +303,9 @@ app.post(
+ 
+ 		if ((task as string) === "add") {
+ 			// addString is the plaintext string that the user wants to add to the database
++			//chunk the note
+ 			let addString: string = addContent;
++			let vectorContent: Chunks = chunkNote(addContent);
+ 
+ 			if (thingToAdd === "page") {
+ 				// TODO: Sometimes this query hangs, and errors out. we need to do proper error management here.
+@@ -300,6 +316,7 @@ app.post(
+ 				});
+ 
+ 				addString = await response.text();
++				vectorContent = chunkPage(addString);
+ 			}
+ 
+ 			// At this point, we can just go ahead and create the embeddings!
+@@ -312,7 +329,7 @@ app.post(
+ 					pageContent: addString,
+ 					title: `${addString.slice(0, 30)}... (Added from chatbot)`,
+ 				},
+-				chunks: chunkText(addString, 1536),
++				chunks: vectorContent,
+ 				context: c,
+ 			});
+ 
+diff --git a/apps/cf-ai-backend/src/types.ts b/apps/cf-ai-backend/src/types.ts
+index 4db568a..5ef81f2 100644
+--- a/apps/cf-ai-backend/src/types.ts
++++ b/apps/cf-ai-backend/src/types.ts
+@@ -1,5 +1,6 @@
+ import { sourcesZod } from "@repo/shared-types";
+ import { z } from "zod";
++import { ThreadTweetData } from "./utils/chunkTweet";
+ 
+ export type Env = {
+ 	VECTORIZE_INDEX: VectorizeIndex;
+@@ -7,6 +8,9 @@ export type Env = {
+ 	SECURITY_KEY: string;
+ 	OPENAI_API_KEY: string;
+ 	GOOGLE_AI_API_KEY: string;
++	CF_KV_AUTH_TOKEN: string;
++	KV_NAMESPACE_ID: string;
++	CF_ACCOUNT_ID: string;
+ 	MY_QUEUE: Queue<TweetData[]>;
+ 	KV: KVNamespace;
+ 	MYBROWSER: unknown;
+@@ -23,6 +27,32 @@ export interface TweetData {
+ 	saveToUser: string;
+ }
+ 
++interface BaseChunks {
++	type: "tweet" | "page" | "note" | "image";
++}
++
++export interface TweetChunks extends BaseChunks {
++	type: "tweet";
++	chunks: Array<ThreadTweetData>;
++}
++
++export interface PageOrNoteChunks extends BaseChunks {
++	type: "page" | "note";
++	chunks: string[];
++}
++export interface ImageChunks extends BaseChunks {
++	type: "image";
++	chunks: string[];
++}
++
++export type Chunks = TweetChunks | PageOrNoteChunks | ImageChunks;
++
++export interface KVBulkItem {
++	key: string;
++	value: string;
++	base64: boolean;
++}
++
+ export const contentObj = z.object({
+ 	role: z.string(),
+ 	parts: z
+diff --git a/apps/cf-ai-backend/src/utils/chunkPageOrNotes.ts b/apps/cf-ai-backend/src/utils/chunkPageOrNotes.ts
+new file mode 100644
+index 0000000..f04ed0c
+--- /dev/null
++++ b/apps/cf-ai-backend/src/utils/chunkPageOrNotes.ts
+@@ -0,0 +1,13 @@
++import chunkText from "./chonker";
++import { PageOrNoteChunks } from "../types";
++export function chunkPage(pageContent: string): PageOrNoteChunks {
++	const chunks = chunkText(pageContent, 1536);
++
++	return { type: "page", chunks: chunks };
++}
++
++export function chunkNote(noteContent: string): PageOrNoteChunks {
++	const chunks = chunkText(noteContent, 1536);
++
++	return { type: "note", chunks: chunks };
++}
+diff --git a/apps/cf-ai-backend/src/utils/chunkTweet.ts b/apps/cf-ai-backend/src/utils/chunkTweet.ts
+new file mode 100644
+index 0000000..224c6c0
+--- /dev/null
++++ b/apps/cf-ai-backend/src/utils/chunkTweet.ts
+@@ -0,0 +1,40 @@
++import { TweetChunks } from "../types";
++import chunkText from "./chonker";
++
++interface Tweet {
++	id: string;
++	text: string;
++	links: Array<string>;
++	images: Array<string>;
++	videos: Array<string>;
++}
++interface Metadata {
++	tweetId: string;
++	tweetLinks: any[];
++	tweetVids: any[];
++	tweetImages: any[];
++}
++
++export interface ThreadTweetData {
++	chunkedTweet: string[];
++	metadata: Metadata;
++}
++
++export function chunkThread(threadText: string): TweetChunks {
++	const thread = JSON.parse(threadText);
++
++	const chunkedTweets = thread.map((tweet: Tweet) => {
++		const chunkedTweet = chunkText(tweet.text, 1536);
++
++		const metadata = {
++			tweetId: tweet.id,
++			tweetLinks: tweet.links,
++			tweetVids: tweet.videos,
++			tweetImages: tweet.images,
++		};
++
++		return { chunkedTweet, metadata };
++	});
++
++	return { type: "tweet", chunks: chunkedTweets };
++}
+diff --git a/apps/cf-ai-backend/src/utils/kvBulkInsert.ts b/apps/cf-ai-backend/src/utils/kvBulkInsert.ts
+new file mode 100644
+index 0000000..6223641
+--- /dev/null
++++ b/apps/cf-ai-backend/src/utils/kvBulkInsert.ts
+@@ -0,0 +1,43 @@
++import { KVBulkItem } from "../types";
++
++export const bulkInsertKv = async (
++	credentials: {
++		CF_KV_AUTH_TOKEN: string;
++		KV_NAMESPACE_ID: string;
++		CF_ACCOUNT_ID: string;
++	},
++	keyData: {
++		chunkIds: Array<string>;
++		urlid: string;
++	},
++) => {
++	const data: Array<KVBulkItem> = keyData.chunkIds.map((chunkId) => ({
++		key: chunkId,
++		value: keyData.urlid,
++		base64: false,
++	}));
++
++	try {
++		const response = await fetch(
++			`https://api.cloudflare.com/client/v4/accounts/${credentials.CF_ACCOUNT_ID}/storage/kv/namespaces/${credentials.KV_NAMESPACE_ID}/bulk`,
++			{
++				method: "PUT",
++				headers: {
++					Authorization: `Bearer ${credentials.CF_KV_AUTH_TOKEN}`,
++					"Content-Type": "application/json",
++				},
++				body: JSON.stringify(data),
++			},
++		);
++
++		if (!response.ok) {
++			throw new Error(
++				`can't insert bulk to kv because ${response.status} ${response.statusText} ${JSON.stringify(response.body)}`,
++			);
++		}
++		return await response.json();
++	} catch (e) {
++		//dosomething
++		throw e;
++	}
++};
+diff --git a/apps/cf-ai-backend/wrangler.toml b/apps/cf-ai-backend/wrangler.toml
+index ea93fd6..2d0b1bc 100644
+--- a/apps/cf-ai-backend/wrangler.toml
++++ b/apps/cf-ai-backend/wrangler.toml
+@@ -4,9 +4,9 @@ compatibility_date = "2024-02-23"
+ node_compat = true
+ 
+ # [env.preview]
+-[[vectorize]]
+-binding = "VECTORIZE_INDEX"
+-index_name = "supermem-vector-dev"
++# [[vectorize]]
++# binding = "VECTORIZE_INDEX"
++# index_name = "supermem-vector-dev"
+ 
+ # [[vectorize]]
+ # binding = "VECTORIZE_INDEX"
+@@ -24,7 +24,8 @@ binding = "AI"
+ 
+ [[kv_namespaces]]
+ binding = "KV"
+-id = "37a90353da63401e84e20e71165531d0"
++my_id="920cce6847dd4d489a6948559dede348"
++id = "920cce6847dd4d489a6948559dede348"
+ preview_id = "c58b6202814f4224acea97627d0c18aa"
+ 
+ [placement]
+diff --git a/apps/extension/manifest.json b/apps/extension/manifest.json
+index 0edcd32..7f99841 100644
+--- a/apps/extension/manifest.json
++++ b/apps/extension/manifest.json
+@@ -1,7 +1,7 @@
+ {
+ 	"manifest_version": 3,
+ 	"$schema": "https://json.schemastore.org/chrome-manifest",
+-	"version": "2.63",
++	"version": "2.63.1",
+ 	"name": "supermemory",
+ 	"description": "An extension for https://supermemory.ai - an AI hub for all your bookmarks.",
+ 	"background": {
+diff --git a/apps/web/app/(auth)/onboarding/page.tsx b/apps/web/app/(auth)/onboarding/page.tsx
+index 9728d10..10dd232 100644
+--- a/apps/web/app/(auth)/onboarding/page.tsx
++++ b/apps/web/app/(auth)/onboarding/page.tsx
+@@ -1,10 +1,10 @@
+ "use client";
+ 
+ import {
++	ArrowUturnDownIcon,
+ 	ChevronLeftIcon,
+ 	ChevronRightIcon,
+ 	QuestionMarkCircleIcon,
+-	ArrowTurnDownLeftIcon,
+ } from "@heroicons/react/24/solid";
+ import { CheckIcon, PlusCircleIcon } from "@heroicons/react/24/outline";
+ import { motion } from "framer-motion";
+@@ -24,7 +24,7 @@ export default function Home() {
+ 	useEffect(() => {
+ 		const updateDb = async () => {
+ 			await completeOnboarding();
+-		}
++		};
+ 		if (currStep > 3) {
+ 			updateDb().then(() => {
+ 				push("/home?q=what%20is%20supermemory");
+@@ -311,7 +311,7 @@ function StepThree({ currStep }: { currStep: number }) {
+ 									type="submit"
+ 									className="rounded-lg bg-[#369DFD1A] p-3 absolute bottom-4 right-2"
+ 								>
+-									<ArrowTurnDownLeftIcon className="w-4 h-4 text-[#369DFD]" />
++									<ArrowUturnDownIcon className="w-4 h-4 text-[#369DFD]" />
+ 								</button>
+ 							</form>
+ 						</li>
+@@ -389,7 +389,7 @@ function Navbar() {
+ 	const handleSkip = async () => {
+ 		await completeOnboarding();
+ 		router.push("/home?q=what%20is%20supermemory");
+-	}
++	};
+ 
+ 	return (
+ 		<div className="flex items-center justify-between p-4 fixed top-0 left-0 w-full">
+@@ -399,7 +399,9 @@ function Navbar() {
+ 				className="hover:brightness-125 duration-200 size-12"
+ 			/>
+ 
+-			<button className="text-sm" onClick={handleSkip}>Skip</button>
++			<button className="text-sm" onClick={handleSkip}>
++				Skip
++			</button>
+ 		</div>
+ 	);
+ }
+diff --git a/apps/web/app/(dash)/header/header.tsx b/apps/web/app/(dash)/header/header.tsx
+index 9c225bc..eaade25 100644
+--- a/apps/web/app/(dash)/header/header.tsx
++++ b/apps/web/app/(dash)/header/header.tsx
+@@ -6,7 +6,13 @@ import Logo from "../../../public/logo.svg";
+ import { getChatHistory } from "../../actions/fetchers";
+ import NewChatButton from "./newChatButton";
+ import AutoBreadCrumbs from "./autoBreadCrumbs";
+-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@repo/ui/shadcn/dropdown-menu";
++import SignOutButton from "./signOutButton";
++import {
++	DropdownMenu,
++	DropdownMenuContent,
++	DropdownMenuItem,
++	DropdownMenuTrigger,
++} from "@repo/ui/shadcn/dropdown-menu";
+ import { CaretDownIcon } from "@radix-ui/react-icons";
+ 
+ async function Header() {
+@@ -36,9 +42,9 @@ async function Header() {
+ 
+ 					<DropdownMenu>
+ 						<DropdownMenuTrigger className="inline-flex flex-row flex-nowrap items-center text-muted-foreground hover:text-foreground">
+-              History
+-              <CaretDownIcon />
+-            </DropdownMenuTrigger>
++							History
++							<CaretDownIcon />
++						</DropdownMenuTrigger>
+ 						<DropdownMenuContent className="p-4 w-full md:w-[400px] max-h-[70vh] overflow-auto border-none">
+ 							{chatThreads.data.map((thread) => (
+ 								<DropdownMenuItem asChild>
+@@ -54,6 +60,8 @@ async function Header() {
+ 							))}
+ 						</DropdownMenuContent>
+ 					</DropdownMenu>
++
++					<SignOutButton />
+ 				</div>
+ 			</div>
+ 		</div>
+diff --git a/apps/web/app/(dash)/header/signOutButton.tsx b/apps/web/app/(dash)/header/signOutButton.tsx
+new file mode 100644
+index 0000000..4c61c74
+--- /dev/null
++++ b/apps/web/app/(dash)/header/signOutButton.tsx
+@@ -0,0 +1,22 @@
++import { signOut } from "@/server/auth";
++import { Button } from "@repo/ui/shadcn/button";
++
++export default function SignOutButton() {
++	return (
++		<form
++			action={async () => {
++				"use server";
++				await signOut();
++			}}
++		>
++			<Button
++				variant="ghost"
++				size="sm"
++				type="submit"
++				className="text-[#7D8994]"
++			>
++				Sign Out
++			</Button>
++		</form>
++	);
++}
+diff --git a/apps/web/app/(dash)/home/history.tsx b/apps/web/app/(dash)/home/history.tsx
+index e09a5c8..a4cd11d 100644
+--- a/apps/web/app/(dash)/home/history.tsx
++++ b/apps/web/app/(dash)/home/history.tsx
+@@ -1,12 +1,8 @@
+-import { getChatHistory } from "@repo/web/app/actions/fetchers";
+ import { ArrowLongRightIcon } from "@heroicons/react/24/outline";
+ import { Skeleton } from "@repo/ui/shadcn/skeleton";
+-import Link from "next/link";
+ import { memo, useEffect, useState } from "react";
+ import { motion } from "framer-motion";
+-import { chatThreads } from "@/server/db/schema";
+ import { getQuerySuggestions } from "@/app/actions/doers";
+-import { Button } from "@repo/ui/shadcn/button";
+ 
+ const History = memo(({ setQuery }: { setQuery: (q: string) => void }) => {
+ 	const [suggestions, setSuggestions] = useState<string[] | null>(null);
+@@ -20,7 +16,16 @@ const History = memo(({ setQuery }: { setQuery: (q: string) => void }) => {
+ 				return;
+ 			}
+ 			console.log(suggestions);
+-			setSuggestions(suggestions.data.reverse());
++			if (typeof suggestions.data === "string") {
++				const queries = suggestions.data.slice(1, -1).split(", ");
++				const parsedQueries = queries.map((query) =>
++					query.replace(/^'|'$/g, ""),
++				);
++				console.log(parsedQueries);
++				setSuggestions(parsedQueries);
++				return;
++			}
++			setSuggestions(suggestions.data.reverse().slice(0, 3));
+ 		})();
+ 	}, []);
+ 
+diff --git a/apps/web/app/(dash)/home/page.tsx b/apps/web/app/(dash)/home/page.tsx
+index dfcac57..d192d07 100644
+--- a/apps/web/app/(dash)/home/page.tsx
++++ b/apps/web/app/(dash)/home/page.tsx
+@@ -11,7 +11,7 @@ import {
+ } from "@/app/actions/doers";
+ import { toast } from "sonner";
+ import { motion } from "framer-motion";
+-import { ChromeIcon, GithubIcon, TwitterIcon } from "lucide-react";
++import { ChromeIcon, GithubIcon, MailIcon, TwitterIcon } from "lucide-react";
+ import Link from "next/link";
+ import History from "./history";
+ 
+@@ -52,10 +52,6 @@ function Page({ searchParams }: { searchParams: Record<string, string> }) {
+ 			linkTelegram();
+ 		}
+ 
+-		if (extensionInstalled) {
+-			toast.success("Extension installed successfully");
+-		}
+-
+ 		getSpaces().then((res) => {
+ 			if (res.success && res.data) {
+ 				setSpaces(res.data);
+@@ -66,15 +62,15 @@ function Page({ searchParams }: { searchParams: Record<string, string> }) {
+ 
+ 		getSessionAuthToken().then((token) => {
+ 			if (typeof window === "undefined") return;
++			if (extensionInstalled) {
++				toast.success("Extension installed successfully");
++			}
+ 			window.postMessage({ token: token.data }, "*");
+ 		});
+ 	}, [telegramUser]);
+ 
+ 	return (
+ 		<div className="max-w-3xl h-full justify-center flex mx-auto w-full flex-col px-2 md:px-0">
+-			{/* all content goes here */}
+-			{/* <div className="">hi {firstTime ? 'first time' : ''}</div> */}
+-
+ 			<motion.h1
+ 				{...{
+ 					...slap,
+@@ -127,12 +123,12 @@ function Page({ searchParams }: { searchParams: Record<string, string> }) {
+ 						Install extension
+ 					</Link>
+ 					<Link
+-						href="https://github.com/supermemoryai/supermemory/issues/new"
++						href="mailto:feedback@supermemory.ai"
+ 						target="_blank"
+ 						rel="noreferrer"
+ 						className="flex items-center gap-2 text-muted-foreground hover:text-grey-50 duration-300"
+ 					>
+-						<GithubIcon className="w-4 h-4" />
++						<MailIcon className="w-4 h-4" />
+ 						Bug report
+ 					</Link>
+ 					<Link
+diff --git a/apps/web/app/actions/doers.ts b/apps/web/app/actions/doers.ts
+index 4986317..da2bfb5 100644
+--- a/apps/web/app/actions/doers.ts
++++ b/apps/web/app/actions/doers.ts
+@@ -24,6 +24,7 @@ import { redirect } from "next/navigation";
+ import { tweetToMd } from "@repo/shared-types/utils";
+ import { ensureAuth } from "../api/ensureAuth";
+ import { getRandomSentences } from "@/lib/utils";
++import { getRequestContext } from "@cloudflare/next-on-pages";
+ 
+ export const completeOnboarding = async (): ServerActionReturnType<boolean> => {
+ 	const data = await auth();
+@@ -35,10 +36,10 @@ export const completeOnboarding = async (): ServerActionReturnType<boolean> => {
+ 
+ 	try {
+ 		const res = await db
+-		.update(users)
+-		.set({ hasOnboarded: true })
+-		.where(eq(users.id, data.user.id))
+-		.returning({ hasOnboarded: users.hasOnboarded });
++			.update(users)
++			.set({ hasOnboarded: true })
++			.where(eq(users.id, data.user.id))
++			.returning({ hasOnboarded: users.hasOnboarded });
+ 
+ 		if (res.length === 0 || !res[0]?.hasOnboarded) {
+ 			return { success: false, data: false, error: "Failed to update user" };
+@@ -48,9 +49,7 @@ export const completeOnboarding = async (): ServerActionReturnType<boolean> => {
+ 	} catch (e) {
+ 		return { success: false, data: false, error: (e as Error).message };
+ 	}
+-
+-
+-}
++};
+ 
+ export const createSpace = async (
+ 	input: string | FormData,
+@@ -89,7 +88,7 @@ export const createSpace = async (
+ 	}
+ };
+ 
+-const typeDecider = (content: string) => {
++const typeDecider = (content: string): "page" | "tweet" | "note" => {
+ 	// if the content is a URL, then it's a page. if its a URL with https://x.com/user/status/123, then it's a tweet. else, it's a note.
+ 	// do strict checking with regex
+ 	if (content.match(/https?:\/\/(x\.com|twitter\.com)\/[\w]+\/[\w]+\/[\d]+/)) {
+@@ -200,6 +199,7 @@ export const createMemory = async (input: {
+ 
+ 	let pageContent = input.content;
+ 	let metadata: Awaited<ReturnType<typeof getMetaData>>;
++	let vectorData: string;
+ 
+ 	if (!(await limit(data.user.id, type))) {
+ 		return {
+@@ -218,7 +218,7 @@ export const createMemory = async (input: {
+ 			},
+ 		});
+ 		pageContent = await response.text();
+-
++		vectorData = pageContent;
+ 		try {
+ 			metadata = await getMetaData(input.content);
+ 		} catch (e) {
+@@ -228,8 +228,42 @@ export const createMemory = async (input: {
+ 			};
+ 		}
+ 	} else if (type === "tweet") {
++		//Request the worker for the entire thread
++
++		let thread: string;
++		let errorOccurred: boolean = false;
++
++		try {
++			const cf_thread_endpoint = process.env.THREAD_CF_WORKER;
++			const authKey = process.env.THREAD_CF_AUTH;
++
++			const threadRequest = await fetch(cf_thread_endpoint, {
++				method: "POST",
++				headers: {
++					"Content-Type": "application/json",
++					Authorization: authKey,
++				},
++				body: JSON.stringify({ url: input.content }),
++			});
++
++			if (threadRequest.status !== 200) {
++				throw new Error(
++					`Failed to fetch the thread: ${input.content}, Reason: ${threadRequest.statusText}`,
++				);
++			}
++
++			thread = await threadRequest.text();
++		} catch (e) {
++			console.log("[THREAD FETCHING SERVICE] Failed to fetch the thread", e);
++			errorOccurred = true;
++		}
++
+ 		const tweet = await getTweetData(input.content.split("/").pop() as string);
++
+ 		pageContent = tweetToMd(tweet);
++		console.log("THis ishte page content!!", pageContent);
++		//@ts-ignore
++		vectorData = errorOccurred ? pageContent : thread;
+ 		metadata = {
+ 			baseUrl: input.content,
+ 			description: tweet.text.slice(0, 200),
+@@ -238,6 +272,7 @@ export const createMemory = async (input: {
+ 		};
+ 	} else if (type === "note") {
+ 		pageContent = input.content;
++		vectorData = pageContent;
+ 		noteId = new Date().getTime();
+ 		metadata = {
+ 			baseUrl: `https://supermemory.ai/note/${noteId}`,
+@@ -264,7 +299,7 @@ export const createMemory = async (input: {
+ 		{
+ 			method: "POST",
+ 			body: JSON.stringify({
+-				pageContent,
++				pageContent: vectorData,
+ 				title: metadata.title,
+ 				description: metadata.description,
+ 				url: metadata.baseUrl,
+@@ -461,6 +496,7 @@ export const createChatObject = async (
+ 		answer: lastChat.answer.parts.map((part) => part.text).join(""),
+ 		answerSources: JSON.stringify(lastChat.answer.sources),
+ 		threadId,
++		createdAt: new Date(),
+ 	});
+ 
+ 	if (!saved) {
+@@ -746,99 +782,113 @@ export async function getQuerySuggestions() {
+ 		return { error: "Not authenticated", success: false };
+ 	}
+ 
+-	const recommendations = await process.env.RECOMMENDATIONS.get(data.user.id);
++	const { env } = getRequestContext();
+ 
+-	if (recommendations) {
+-		return {
+-			success: true,
+-			data: JSON.parse(recommendations),
+-		};
+-	}
+-
+-	// Randomly choose some storedContent of the user.
+-	const content = await db
+-		.select()
+-		.from(storedContent)
+-		.where(eq(storedContent.userId, data.user.id))
+-		.orderBy(sql`random()`)
+-		.limit(5)
+-		.all();
++	try {
++		const recommendations = await env.RECOMMENDATIONS.get(data.user.id);
+ 
+-	if (content.length === 0) {
+-		return {
+-			success: true,
+-			data: [],
+-		};
+-	}
++		if (recommendations) {
++			return {
++				success: true,
++				data: JSON.parse(recommendations),
++			};
++		}
+ 
+-	const fullQuery = content.map((c) => `${c.title} \n\n${c.content}`).join(" ");
++		// Randomly choose some storedContent of the user.
++		const content = await db
++			.select()
++			.from(storedContent)
++			.where(eq(storedContent.userId, data.user.id))
++			.orderBy(sql`random()`)
++			.limit(5)
++			.all();
+ 
+-	const sentences = getRandomSentences(fullQuery);
++		if (content.length === 0) {
++			return {
++				success: true,
++				data: [],
++			};
++		}
+ 
+-	const suggestionsCall = (await process.env.AI.run(
+-		// @ts-ignore
+-		"@cf/meta/llama-3.1-8b-instruct",
+-		{
+-			messages: [
+-				{
+-					role: "system",
+-					content: `You are a model that suggests questions based on the user's content.`,
+-				},
+-				{
+-					role: "user",
+-					content: `Run the function based on this input: ${sentences}`,
+-				},
+-			],
+-			tools: [
+-				{
+-					type: "function",
+-					function: {
+-						name: "querySuggestions",
+-						description:
+-							"Take the user's content to suggest some good questions that they could ask.",
+-						parameters: {
+-							type: "object",
+-							properties: {
+-								querySuggestions: {
+-									type: "array",
+-									description:
+-										"Short questions that the user can ask. Give atleast 3 suggestions. No more than 5.",
+-									items: {
+-										type: "string",
++		const fullQuery = content
++			.map((c) => `${c.title} \n\n${c.content}`)
++			.join(" ");
++
++		const suggestionsCall = (await env.AI.run(
++			// @ts-ignore
++			"@cf/meta/llama-3.1-8b-instruct",
++			{
++				messages: [
++					{
++						role: "system",
++						content: `You are a model that suggests questions based on the user's content. you MUST suggest atleast 1 question to ask. AT MAX, create 3 suggestions. not more than that.`,
++					},
++					{
++						role: "user",
++						content: `Run the function based on this input: ${fullQuery.slice(0, 2000)}`,
++					},
++				],
++				tools: [
++					{
++						type: "function",
++						function: {
++							name: "querySuggestions",
++							description:
++								"Take the user's content to suggest some good questions that they could ask.",
++							parameters: {
++								type: "object",
++								properties: {
++									querySuggestions: {
++										type: "array",
++										description:
++											"Short questions that the user can ask. Give atleast 3 suggestions. No more than 5.",
++										items: {
++											type: "string",
++										},
+ 									},
+ 								},
++								required: ["querySuggestions"],
+ 							},
+-							required: ["querySuggestions"],
+ 						},
+ 					},
+-				},
+-			],
+-		},
+-	)) as {
+-		response: string;
+-		tool_calls: { name: string; arguments: { querySuggestions: string[] } }[];
+-	};
++				],
++			},
++		)) as {
++			response: string;
++			tool_calls: { name: string; arguments: { querySuggestions: string[] } }[];
++		};
++
++		console.log(
++			"I RAN AN AI CALLS OWOWOWOWOW",
++			JSON.stringify(suggestionsCall, null, 2),
++		);
++
++		const suggestions =
++			suggestionsCall.tool_calls?.[0]?.arguments?.querySuggestions;
+ 
+-	const suggestions =
+-		suggestionsCall.tool_calls?.[0]?.arguments?.querySuggestions;
++		if (!suggestions || suggestions.length === 0) {
++			return {
++				success: false,
++				error: "Failed to get query suggestions",
++			};
++		}
+ 
+-	if (!suggestions || suggestions.length === 0) {
++		if (suggestions.length > 0) {
++			await env.RECOMMENDATIONS.put(data.user.id, JSON.stringify(suggestions), {
++				expirationTtl: 60 * 2,
++			});
++		}
++
++		return {
++			success: true,
++			data: suggestions,
++		};
++	} catch (exception) {
++		const error = exception as Error;
+ 		return {
+ 			success: false,
+-			error: "Failed to get query suggestions",
++			error: error.message,
++			data: [],
+ 		};
+ 	}
+-
+-	await process.env.RECOMMENDATIONS.put(
+-		data.user.id,
+-		JSON.stringify(suggestions),
+-		{
+-			expirationTtl: 60 * 5,
+-		},
+-	);
+-
+-	return {
+-		success: true,
+-		data: suggestions,
+-	};
+ }
+diff --git a/apps/web/app/api/chat/route.ts b/apps/web/app/api/chat/route.ts
+index 3b8d971..a14c96d 100644
+--- a/apps/web/app/api/chat/route.ts
++++ b/apps/web/app/api/chat/route.ts
+@@ -7,6 +7,10 @@ import {
+ } from "@repo/shared-types";
+ import { ensureAuth } from "../ensureAuth";
+ import { z } from "zod";
++import { db } from "@/server/db";
++import { chatHistory as chatHistoryDb, chatThreads } from "@/server/db/schema";
++import { and, eq, gt, sql } from "drizzle-orm";
++import { join } from "path";
+ 
+ export const runtime = "edge";
+ 
+@@ -21,6 +25,49 @@ export async function POST(req: NextRequest) {
+ 		return new Response("Missing BACKEND_SECURITY_KEY", { status: 500 });
+ 	}
+ 
++	const ip = req.headers.get("cf-connecting-ip");
++
++	if (ip) {
++		if (process.env.RATELIMITER) {
++			const { success } = await process.env.RATELIMITER.limit({
++				key: `chat-${ip}`,
++			});
++
++			if (!success) {
++				console.error("rate limit exceeded");
++				return new Response("Rate limit exceeded", { status: 429 });
++			}
++		} else {
++			console.info("RATELIMITER not found in env");
++		}
++	} else {
++		console.info("cf-connecting-ip not found in headers");
++	}
++
++	const lastHour = new Date(new Date().getTime() - 3600000);
++
++	// Only allow 5 requests per hour for each user, something lke this but this one is bad because chathistory.userid doesnt exist, we have to do a join and get it from the threads table
++	const result = await db
++		.select({
++			count: sql<number>`count(*)`.mapWith(Number),
++		})
++		.from(chatHistoryDb)
++		.innerJoin(chatThreads, eq(chatHistoryDb.threadId, chatThreads.id))
++		.where(
++			and(
++				eq(chatThreads.userId, session.user.id),
++				gt(chatHistoryDb.createdAt, lastHour),
++			),
++		)
++		.execute();
++
++	if (result[0]?.count && result[0]?.count >= 5) {
++		// return new Response(`Too many requests ${result[0]?.count}`, { status: 429 });
++		console.log(result[0]?.count);
++	} else {
++		console.log("count", result);
++	}
++
+ 	const url = new URL(req.url);
+ 
+ 	const query = url.searchParams.get("q");
+diff --git a/apps/web/app/api/store/route.ts b/apps/web/app/api/store/route.ts
+index f9ab7c0..992c2a0 100644
+--- a/apps/web/app/api/store/route.ts
++++ b/apps/web/app/api/store/route.ts
+@@ -4,7 +4,7 @@ import { ensureAuth } from "../ensureAuth";
+ import { z } from "zod";
+ import { db } from "@/server/db";
+ import { contentToSpace, space, storedContent } from "@/server/db/schema";
+-import { and, eq, inArray } from "drizzle-orm";
++import { and, eq, gt, inArray, sql } from "drizzle-orm";
+ import { LIMITS } from "@/lib/constants";
+ import { limit } from "@/app/actions/doers";
+ 
+@@ -22,6 +22,29 @@ const createMemoryFromAPI = async (input: {
+ 		};
+ 	}
+ 
++	// Get number of items saved in the last 2 hours
++	const last2Hours = new Date(Date.now() - 2 * 60 * 60 * 1000);
++
++	const numberOfItemsSavedInLast2Hours = await db
++		.select({
++			count: sql<number>`count(*)`.mapWith(Number),
++		})
++		.from(storedContent)
++		.where(
++			and(
++				gt(storedContent.savedAt, last2Hours),
++				eq(storedContent.userId, input.userId),
++			),
++		);
++
++	if (numberOfItemsSavedInLast2Hours[0]!.count >= 20) {
++		return {
++			success: false,
++			data: 0,
++			error: `You have exceeded the limit`,
++		};
++	}
++
+ 	const vectorSaveResponse = await fetch(
+ 		`${process.env.BACKEND_BASE_URL}/api/add`,
+ 		{
+diff --git a/apps/web/app/layout.tsx b/apps/web/app/layout.tsx
+index cf6e9b0..94a538e 100644
+--- a/apps/web/app/layout.tsx
++++ b/apps/web/app/layout.tsx
+@@ -66,9 +66,14 @@ export default function RootLayout({
+ }): JSX.Element {
+ 	return (
+ 		<html lang="en" className="overflow-x-hidden" suppressHydrationWarning>
+-			{/* <head>
+-        <ThemeScript />
+-      </head> */}
++			<head>
++				{/* Cloudflare web analytics */}
++				<script
++					defer
++					src="https://static.cloudflareinsights.com/beacon.min.js"
++					data-cf-beacon='{"token": "16d76ebb82c74d9983b71d09ab6617bc"}'
++				></script>
++			</head>
+ 			{/* TODO: when lightmode support is added, remove the 'dark' class from the body tag */}
+ 			<body
+ 				className={cn(
+diff --git a/apps/web/cf-env.d.ts b/apps/web/cf-env.d.ts
+index 7381d63..09b0690 100644
+--- a/apps/web/cf-env.d.ts
++++ b/apps/web/cf-env.d.ts
+@@ -18,7 +18,14 @@ declare global {
+ 			CLOUDFLARE_DATABASE_ID: string;
+ 			CLOUDFLARE_D1_TOKEN: string;
+ 
++			THREAD_CF_WORKER: string;
++			THREAD_CF_AUTH: string;
++
+ 			MOBILE_TRUST_TOKEN: string;
++
++			RATELIMITER: {
++				limit: ({ key: string }) => { success: boolean };
++			};
+ 		}
+ 	}
+ }
+diff --git a/apps/web/migrations/0000_setup.sql b/apps/web/migrations/0000_steep_moira_mactaggert.sql
+similarity index 96%
+rename from apps/web/migrations/0000_setup.sql
+rename to apps/web/migrations/0000_steep_moira_mactaggert.sql
+index 65a4179..5813639 100644
+--- a/apps/web/migrations/0000_setup.sql
++++ b/apps/web/migrations/0000_steep_moira_mactaggert.sql
+@@ -43,6 +43,7 @@ CREATE TABLE `chatHistory` (
+ 	`answerParts` text,
+ 	`answerSources` text,
+ 	`answerJustification` text,
++	`createdAt` integer DEFAULT '"2024-07-25T22:31:50.848Z"' NOT NULL,
+ 	FOREIGN KEY (`threadId`) REFERENCES `chatThread`(`id`) ON UPDATE no action ON DELETE cascade
+ );
+ --> statement-breakpoint
+@@ -106,7 +107,8 @@ CREATE TABLE `user` (
+ 	`email` text NOT NULL,
+ 	`emailVerified` integer,
+ 	`image` text,
+-	`telegramId` text
++	`telegramId` text,
++	`hasOnboarded` integer DEFAULT false
+ );
+ --> statement-breakpoint
+ CREATE TABLE `verificationToken` (
+diff --git a/apps/web/migrations/0001_dear_sally_floyd.sql b/apps/web/migrations/0001_dear_sally_floyd.sql
+deleted file mode 100644
+index 8fa112f..0000000
+--- a/apps/web/migrations/0001_dear_sally_floyd.sql
++++ /dev/null
+@@ -1 +0,0 @@
+-ALTER TABLE `user` ADD `hasOnboarded` integer DEFAULT false;
+\ No newline at end of file
+diff --git a/apps/web/migrations/meta/0000_snapshot.json b/apps/web/migrations/meta/0000_snapshot.json
+index 7e502c8..a768901 100644
+--- a/apps/web/migrations/meta/0000_snapshot.json
++++ b/apps/web/migrations/meta/0000_snapshot.json
+@@ -1,895 +1,822 @@
+ {
+-  "version": "6",
+-  "dialect": "sqlite",
+-  "id": "e8646bed-105d-4f69-b385-b8b6fee8a6a9",
+-  "prevId": "00000000-0000-0000-0000-000000000000",
+-  "tables": {
+-    "account": {
+-      "name": "account",
+-      "columns": {
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "type": {
+-          "name": "type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "provider": {
+-          "name": "provider",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "providerAccountId": {
+-          "name": "providerAccountId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "refresh_token": {
+-          "name": "refresh_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "access_token": {
+-          "name": "access_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "expires_at": {
+-          "name": "expires_at",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "token_type": {
+-          "name": "token_type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "scope": {
+-          "name": "scope",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "id_token": {
+-          "name": "id_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "session_state": {
+-          "name": "session_state",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "account_userId_user_id_fk": {
+-          "name": "account_userId_user_id_fk",
+-          "tableFrom": "account",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "account_provider_providerAccountId_pk": {
+-          "columns": [
+-            "provider",
+-            "providerAccountId"
+-          ],
+-          "name": "account_provider_providerAccountId_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "authenticator": {
+-      "name": "authenticator",
+-      "columns": {
+-        "credentialID": {
+-          "name": "credentialID",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "providerAccountId": {
+-          "name": "providerAccountId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialPublicKey": {
+-          "name": "credentialPublicKey",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "counter": {
+-          "name": "counter",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialDeviceType": {
+-          "name": "credentialDeviceType",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialBackedUp": {
+-          "name": "credentialBackedUp",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "transports": {
+-          "name": "transports",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "authenticator_credentialID_unique": {
+-          "name": "authenticator_credentialID_unique",
+-          "columns": [
+-            "credentialID"
+-          ],
+-          "isUnique": true
+-        }
+-      },
+-      "foreignKeys": {
+-        "authenticator_userId_user_id_fk": {
+-          "name": "authenticator_userId_user_id_fk",
+-          "tableFrom": "authenticator",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "authenticator_userId_credentialID_pk": {
+-          "columns": [
+-            "credentialID",
+-            "userId"
+-          ],
+-          "name": "authenticator_userId_credentialID_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "canvas": {
+-      "name": "canvas",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "title": {
+-          "name": "title",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'Untitled'"
+-        },
+-        "description": {
+-          "name": "description",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'Untitled'"
+-        },
+-        "url": {
+-          "name": "url",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "''"
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "canvas_user_userId": {
+-          "name": "canvas_user_userId",
+-          "columns": [
+-            "userId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "canvas_userId_user_id_fk": {
+-          "name": "canvas_userId_user_id_fk",
+-          "tableFrom": "canvas",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "chatHistory": {
+-      "name": "chatHistory",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "threadId": {
+-          "name": "threadId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "question": {
+-          "name": "question",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "answerParts": {
+-          "name": "answerParts",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "answerSources": {
+-          "name": "answerSources",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "answerJustification": {
+-          "name": "answerJustification",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "chatHistory_thread_idx": {
+-          "name": "chatHistory_thread_idx",
+-          "columns": [
+-            "threadId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "chatHistory_threadId_chatThread_id_fk": {
+-          "name": "chatHistory_threadId_chatThread_id_fk",
+-          "tableFrom": "chatHistory",
+-          "tableTo": "chatThread",
+-          "columnsFrom": [
+-            "threadId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "chatThread": {
+-      "name": "chatThread",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "firstMessage": {
+-          "name": "firstMessage",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "chatThread_user_idx": {
+-          "name": "chatThread_user_idx",
+-          "columns": [
+-            "userId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "chatThread_userId_user_id_fk": {
+-          "name": "chatThread_userId_user_id_fk",
+-          "tableFrom": "chatThread",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "contentToSpace": {
+-      "name": "contentToSpace",
+-      "columns": {
+-        "contentId": {
+-          "name": "contentId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "spaceId": {
+-          "name": "spaceId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "contentToSpace_contentId_storedContent_id_fk": {
+-          "name": "contentToSpace_contentId_storedContent_id_fk",
+-          "tableFrom": "contentToSpace",
+-          "tableTo": "storedContent",
+-          "columnsFrom": [
+-            "contentId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        },
+-        "contentToSpace_spaceId_space_id_fk": {
+-          "name": "contentToSpace_spaceId_space_id_fk",
+-          "tableFrom": "contentToSpace",
+-          "tableTo": "space",
+-          "columnsFrom": [
+-            "spaceId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "contentToSpace_contentId_spaceId_pk": {
+-          "columns": [
+-            "contentId",
+-            "spaceId"
+-          ],
+-          "name": "contentToSpace_contentId_spaceId_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "session": {
+-      "name": "session",
+-      "columns": {
+-        "sessionToken": {
+-          "name": "sessionToken",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "expires": {
+-          "name": "expires",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "session_userId_user_id_fk": {
+-          "name": "session_userId_user_id_fk",
+-          "tableFrom": "session",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "space": {
+-      "name": "space",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "name": {
+-          "name": "name",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'none'"
+-        },
+-        "user": {
+-          "name": "user",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "createdAt": {
+-          "name": "createdAt",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "numItems": {
+-          "name": "numItems",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": 0
+-        }
+-      },
+-      "indexes": {
+-        "space_name_unique": {
+-          "name": "space_name_unique",
+-          "columns": [
+-            "name"
+-          ],
+-          "isUnique": true
+-        },
+-        "spaces_name_idx": {
+-          "name": "spaces_name_idx",
+-          "columns": [
+-            "name"
+-          ],
+-          "isUnique": false
+-        },
+-        "spaces_user_idx": {
+-          "name": "spaces_user_idx",
+-          "columns": [
+-            "user"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "space_user_user_id_fk": {
+-          "name": "space_user_user_id_fk",
+-          "tableFrom": "space",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "user"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "spacesAccess": {
+-      "name": "spacesAccess",
+-      "columns": {
+-        "spaceId": {
+-          "name": "spaceId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userEmail": {
+-          "name": "userEmail",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "spacesAccess_spaceId_space_id_fk": {
+-          "name": "spacesAccess_spaceId_space_id_fk",
+-          "tableFrom": "spacesAccess",
+-          "tableTo": "space",
+-          "columnsFrom": [
+-            "spaceId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "spacesAccess_spaceId_userEmail_pk": {
+-          "columns": [
+-            "spaceId",
+-            "userEmail"
+-          ],
+-          "name": "spacesAccess_spaceId_userEmail_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "storedContent": {
+-      "name": "storedContent",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "content": {
+-          "name": "content",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "title": {
+-          "name": "title",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "description": {
+-          "name": "description",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "url": {
+-          "name": "url",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "savedAt": {
+-          "name": "savedAt",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "baseUrl": {
+-          "name": "baseUrl",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "ogImage": {
+-          "name": "ogImage",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "type": {
+-          "name": "type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false,
+-          "default": "'page'"
+-        },
+-        "image": {
+-          "name": "image",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "user": {
+-          "name": "user",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "noteId": {
+-          "name": "noteId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "storedContent_baseUrl_unique": {
+-          "name": "storedContent_baseUrl_unique",
+-          "columns": [
+-            "baseUrl"
+-          ],
+-          "isUnique": true
+-        },
+-        "storedContent_url_idx": {
+-          "name": "storedContent_url_idx",
+-          "columns": [
+-            "url"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_savedAt_idx": {
+-          "name": "storedContent_savedAt_idx",
+-          "columns": [
+-            "savedAt"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_title_idx": {
+-          "name": "storedContent_title_idx",
+-          "columns": [
+-            "title"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_user_idx": {
+-          "name": "storedContent_user_idx",
+-          "columns": [
+-            "user"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "storedContent_user_user_id_fk": {
+-          "name": "storedContent_user_user_id_fk",
+-          "tableFrom": "storedContent",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "user"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "user": {
+-      "name": "user",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "name": {
+-          "name": "name",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "email": {
+-          "name": "email",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "emailVerified": {
+-          "name": "emailVerified",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "image": {
+-          "name": "image",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "telegramId": {
+-          "name": "telegramId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "users_email_idx": {
+-          "name": "users_email_idx",
+-          "columns": [
+-            "email"
+-          ],
+-          "isUnique": false
+-        },
+-        "users_telegram_idx": {
+-          "name": "users_telegram_idx",
+-          "columns": [
+-            "telegramId"
+-          ],
+-          "isUnique": false
+-        },
+-        "users_id_idx": {
+-          "name": "users_id_idx",
+-          "columns": [
+-            "id"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {},
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "verificationToken": {
+-      "name": "verificationToken",
+-      "columns": {
+-        "identifier": {
+-          "name": "identifier",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "token": {
+-          "name": "token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "expires": {
+-          "name": "expires",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {},
+-      "compositePrimaryKeys": {
+-        "verificationToken_identifier_token_pk": {
+-          "columns": [
+-            "identifier",
+-            "token"
+-          ],
+-          "name": "verificationToken_identifier_token_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    }
+-  },
+-  "enums": {},
+-  "_meta": {
+-    "schemas": {},
+-    "tables": {},
+-    "columns": {}
+-  }
+-}
+\ No newline at end of file
++	"version": "6",
++	"dialect": "sqlite",
++	"id": "8705302a-eae7-4fbf-9ce8-8ae23df228a2",
++	"prevId": "00000000-0000-0000-0000-000000000000",
++	"tables": {
++		"account": {
++			"name": "account",
++			"columns": {
++				"userId": {
++					"name": "userId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"type": {
++					"name": "type",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"provider": {
++					"name": "provider",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"providerAccountId": {
++					"name": "providerAccountId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"refresh_token": {
++					"name": "refresh_token",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"access_token": {
++					"name": "access_token",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"expires_at": {
++					"name": "expires_at",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"token_type": {
++					"name": "token_type",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"scope": {
++					"name": "scope",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"id_token": {
++					"name": "id_token",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"session_state": {
++					"name": "session_state",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				}
++			},
++			"indexes": {},
++			"foreignKeys": {
++				"account_userId_user_id_fk": {
++					"name": "account_userId_user_id_fk",
++					"tableFrom": "account",
++					"tableTo": "user",
++					"columnsFrom": ["userId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {
++				"account_provider_providerAccountId_pk": {
++					"columns": ["provider", "providerAccountId"],
++					"name": "account_provider_providerAccountId_pk"
++				}
++			},
++			"uniqueConstraints": {}
++		},
++		"authenticator": {
++			"name": "authenticator",
++			"columns": {
++				"credentialID": {
++					"name": "credentialID",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"userId": {
++					"name": "userId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"providerAccountId": {
++					"name": "providerAccountId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"credentialPublicKey": {
++					"name": "credentialPublicKey",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"counter": {
++					"name": "counter",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"credentialDeviceType": {
++					"name": "credentialDeviceType",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"credentialBackedUp": {
++					"name": "credentialBackedUp",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"transports": {
++					"name": "transports",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				}
++			},
++			"indexes": {
++				"authenticator_credentialID_unique": {
++					"name": "authenticator_credentialID_unique",
++					"columns": ["credentialID"],
++					"isUnique": true
++				}
++			},
++			"foreignKeys": {
++				"authenticator_userId_user_id_fk": {
++					"name": "authenticator_userId_user_id_fk",
++					"tableFrom": "authenticator",
++					"tableTo": "user",
++					"columnsFrom": ["userId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {
++				"authenticator_userId_credentialID_pk": {
++					"columns": ["credentialID", "userId"],
++					"name": "authenticator_userId_credentialID_pk"
++				}
++			},
++			"uniqueConstraints": {}
++		},
++		"canvas": {
++			"name": "canvas",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "text",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"title": {
++					"name": "title",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": "'Untitled'"
++				},
++				"description": {
++					"name": "description",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": "'Untitled'"
++				},
++				"url": {
++					"name": "url",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": "''"
++				},
++				"userId": {
++					"name": "userId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {
++				"canvas_user_userId": {
++					"name": "canvas_user_userId",
++					"columns": ["userId"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {
++				"canvas_userId_user_id_fk": {
++					"name": "canvas_userId_user_id_fk",
++					"tableFrom": "canvas",
++					"tableTo": "user",
++					"columnsFrom": ["userId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"chatHistory": {
++			"name": "chatHistory",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "integer",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": true
++				},
++				"threadId": {
++					"name": "threadId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"question": {
++					"name": "question",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"answerParts": {
++					"name": "answerParts",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"answerSources": {
++					"name": "answerSources",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"answerJustification": {
++					"name": "answerJustification",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"createdAt": {
++					"name": "createdAt",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": "'\"2024-07-25T22:31:50.848Z\"'"
++				}
++			},
++			"indexes": {
++				"chatHistory_thread_idx": {
++					"name": "chatHistory_thread_idx",
++					"columns": ["threadId"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {
++				"chatHistory_threadId_chatThread_id_fk": {
++					"name": "chatHistory_threadId_chatThread_id_fk",
++					"tableFrom": "chatHistory",
++					"tableTo": "chatThread",
++					"columnsFrom": ["threadId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"chatThread": {
++			"name": "chatThread",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "text",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"firstMessage": {
++					"name": "firstMessage",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"userId": {
++					"name": "userId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {
++				"chatThread_user_idx": {
++					"name": "chatThread_user_idx",
++					"columns": ["userId"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {
++				"chatThread_userId_user_id_fk": {
++					"name": "chatThread_userId_user_id_fk",
++					"tableFrom": "chatThread",
++					"tableTo": "user",
++					"columnsFrom": ["userId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"contentToSpace": {
++			"name": "contentToSpace",
++			"columns": {
++				"contentId": {
++					"name": "contentId",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"spaceId": {
++					"name": "spaceId",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {},
++			"foreignKeys": {
++				"contentToSpace_contentId_storedContent_id_fk": {
++					"name": "contentToSpace_contentId_storedContent_id_fk",
++					"tableFrom": "contentToSpace",
++					"tableTo": "storedContent",
++					"columnsFrom": ["contentId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				},
++				"contentToSpace_spaceId_space_id_fk": {
++					"name": "contentToSpace_spaceId_space_id_fk",
++					"tableFrom": "contentToSpace",
++					"tableTo": "space",
++					"columnsFrom": ["spaceId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {
++				"contentToSpace_contentId_spaceId_pk": {
++					"columns": ["contentId", "spaceId"],
++					"name": "contentToSpace_contentId_spaceId_pk"
++				}
++			},
++			"uniqueConstraints": {}
++		},
++		"session": {
++			"name": "session",
++			"columns": {
++				"sessionToken": {
++					"name": "sessionToken",
++					"type": "text",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"userId": {
++					"name": "userId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"expires": {
++					"name": "expires",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {},
++			"foreignKeys": {
++				"session_userId_user_id_fk": {
++					"name": "session_userId_user_id_fk",
++					"tableFrom": "session",
++					"tableTo": "user",
++					"columnsFrom": ["userId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"space": {
++			"name": "space",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "integer",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": true
++				},
++				"name": {
++					"name": "name",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": "'none'"
++				},
++				"user": {
++					"name": "user",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"createdAt": {
++					"name": "createdAt",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"numItems": {
++					"name": "numItems",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false,
++					"default": 0
++				}
++			},
++			"indexes": {
++				"space_name_unique": {
++					"name": "space_name_unique",
++					"columns": ["name"],
++					"isUnique": true
++				},
++				"spaces_name_idx": {
++					"name": "spaces_name_idx",
++					"columns": ["name"],
++					"isUnique": false
++				},
++				"spaces_user_idx": {
++					"name": "spaces_user_idx",
++					"columns": ["user"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {
++				"space_user_user_id_fk": {
++					"name": "space_user_user_id_fk",
++					"tableFrom": "space",
++					"tableTo": "user",
++					"columnsFrom": ["user"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"spacesAccess": {
++			"name": "spacesAccess",
++			"columns": {
++				"spaceId": {
++					"name": "spaceId",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"userEmail": {
++					"name": "userEmail",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {},
++			"foreignKeys": {
++				"spacesAccess_spaceId_space_id_fk": {
++					"name": "spacesAccess_spaceId_space_id_fk",
++					"tableFrom": "spacesAccess",
++					"tableTo": "space",
++					"columnsFrom": ["spaceId"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {
++				"spacesAccess_spaceId_userEmail_pk": {
++					"columns": ["spaceId", "userEmail"],
++					"name": "spacesAccess_spaceId_userEmail_pk"
++				}
++			},
++			"uniqueConstraints": {}
++		},
++		"storedContent": {
++			"name": "storedContent",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "integer",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": true
++				},
++				"content": {
++					"name": "content",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"title": {
++					"name": "title",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"description": {
++					"name": "description",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"url": {
++					"name": "url",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"savedAt": {
++					"name": "savedAt",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"baseUrl": {
++					"name": "baseUrl",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"ogImage": {
++					"name": "ogImage",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"type": {
++					"name": "type",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false,
++					"default": "'page'"
++				},
++				"image": {
++					"name": "image",
++					"type": "text(255)",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"user": {
++					"name": "user",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"noteId": {
++					"name": "noteId",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				}
++			},
++			"indexes": {
++				"storedContent_baseUrl_unique": {
++					"name": "storedContent_baseUrl_unique",
++					"columns": ["baseUrl"],
++					"isUnique": true
++				},
++				"storedContent_url_idx": {
++					"name": "storedContent_url_idx",
++					"columns": ["url"],
++					"isUnique": false
++				},
++				"storedContent_savedAt_idx": {
++					"name": "storedContent_savedAt_idx",
++					"columns": ["savedAt"],
++					"isUnique": false
++				},
++				"storedContent_title_idx": {
++					"name": "storedContent_title_idx",
++					"columns": ["title"],
++					"isUnique": false
++				},
++				"storedContent_user_idx": {
++					"name": "storedContent_user_idx",
++					"columns": ["user"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {
++				"storedContent_user_user_id_fk": {
++					"name": "storedContent_user_user_id_fk",
++					"tableFrom": "storedContent",
++					"tableTo": "user",
++					"columnsFrom": ["user"],
++					"columnsTo": ["id"],
++					"onDelete": "cascade",
++					"onUpdate": "no action"
++				}
++			},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"user": {
++			"name": "user",
++			"columns": {
++				"id": {
++					"name": "id",
++					"type": "text",
++					"primaryKey": true,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"name": {
++					"name": "name",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"email": {
++					"name": "email",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"emailVerified": {
++					"name": "emailVerified",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"image": {
++					"name": "image",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"telegramId": {
++					"name": "telegramId",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false
++				},
++				"hasOnboarded": {
++					"name": "hasOnboarded",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": false,
++					"autoincrement": false,
++					"default": false
++				}
++			},
++			"indexes": {
++				"users_email_idx": {
++					"name": "users_email_idx",
++					"columns": ["email"],
++					"isUnique": false
++				},
++				"users_telegram_idx": {
++					"name": "users_telegram_idx",
++					"columns": ["telegramId"],
++					"isUnique": false
++				},
++				"users_id_idx": {
++					"name": "users_id_idx",
++					"columns": ["id"],
++					"isUnique": false
++				}
++			},
++			"foreignKeys": {},
++			"compositePrimaryKeys": {},
++			"uniqueConstraints": {}
++		},
++		"verificationToken": {
++			"name": "verificationToken",
++			"columns": {
++				"identifier": {
++					"name": "identifier",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"token": {
++					"name": "token",
++					"type": "text",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				},
++				"expires": {
++					"name": "expires",
++					"type": "integer",
++					"primaryKey": false,
++					"notNull": true,
++					"autoincrement": false
++				}
++			},
++			"indexes": {},
++			"foreignKeys": {},
++			"compositePrimaryKeys": {
++				"verificationToken_identifier_token_pk": {
++					"columns": ["identifier", "token"],
++					"name": "verificationToken_identifier_token_pk"
++				}
++			},
++			"uniqueConstraints": {}
++		}
++	},
++	"enums": {},
++	"_meta": {
++		"schemas": {},
++		"tables": {},
++		"columns": {}
++	}
++}
+diff --git a/apps/web/migrations/meta/0001_snapshot.json b/apps/web/migrations/meta/0001_snapshot.json
+deleted file mode 100644
+index 461b3c7..0000000
+--- a/apps/web/migrations/meta/0001_snapshot.json
++++ /dev/null
+@@ -1,903 +0,0 @@
+-{
+-  "version": "6",
+-  "dialect": "sqlite",
+-  "id": "1f43694b-f42b-4074-876e-8501fc18bf38",
+-  "prevId": "e8646bed-105d-4f69-b385-b8b6fee8a6a9",
+-  "tables": {
+-    "account": {
+-      "name": "account",
+-      "columns": {
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "type": {
+-          "name": "type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "provider": {
+-          "name": "provider",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "providerAccountId": {
+-          "name": "providerAccountId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "refresh_token": {
+-          "name": "refresh_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "access_token": {
+-          "name": "access_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "expires_at": {
+-          "name": "expires_at",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "token_type": {
+-          "name": "token_type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "scope": {
+-          "name": "scope",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "id_token": {
+-          "name": "id_token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "session_state": {
+-          "name": "session_state",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "account_userId_user_id_fk": {
+-          "name": "account_userId_user_id_fk",
+-          "tableFrom": "account",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "account_provider_providerAccountId_pk": {
+-          "columns": [
+-            "provider",
+-            "providerAccountId"
+-          ],
+-          "name": "account_provider_providerAccountId_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "authenticator": {
+-      "name": "authenticator",
+-      "columns": {
+-        "credentialID": {
+-          "name": "credentialID",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "providerAccountId": {
+-          "name": "providerAccountId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialPublicKey": {
+-          "name": "credentialPublicKey",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "counter": {
+-          "name": "counter",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialDeviceType": {
+-          "name": "credentialDeviceType",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "credentialBackedUp": {
+-          "name": "credentialBackedUp",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "transports": {
+-          "name": "transports",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "authenticator_credentialID_unique": {
+-          "name": "authenticator_credentialID_unique",
+-          "columns": [
+-            "credentialID"
+-          ],
+-          "isUnique": true
+-        }
+-      },
+-      "foreignKeys": {
+-        "authenticator_userId_user_id_fk": {
+-          "name": "authenticator_userId_user_id_fk",
+-          "tableFrom": "authenticator",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "authenticator_userId_credentialID_pk": {
+-          "columns": [
+-            "credentialID",
+-            "userId"
+-          ],
+-          "name": "authenticator_userId_credentialID_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "canvas": {
+-      "name": "canvas",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "title": {
+-          "name": "title",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'Untitled'"
+-        },
+-        "description": {
+-          "name": "description",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'Untitled'"
+-        },
+-        "url": {
+-          "name": "url",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "''"
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "canvas_user_userId": {
+-          "name": "canvas_user_userId",
+-          "columns": [
+-            "userId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "canvas_userId_user_id_fk": {
+-          "name": "canvas_userId_user_id_fk",
+-          "tableFrom": "canvas",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "chatHistory": {
+-      "name": "chatHistory",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "threadId": {
+-          "name": "threadId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "question": {
+-          "name": "question",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "answerParts": {
+-          "name": "answerParts",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "answerSources": {
+-          "name": "answerSources",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "answerJustification": {
+-          "name": "answerJustification",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "chatHistory_thread_idx": {
+-          "name": "chatHistory_thread_idx",
+-          "columns": [
+-            "threadId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "chatHistory_threadId_chatThread_id_fk": {
+-          "name": "chatHistory_threadId_chatThread_id_fk",
+-          "tableFrom": "chatHistory",
+-          "tableTo": "chatThread",
+-          "columnsFrom": [
+-            "threadId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "chatThread": {
+-      "name": "chatThread",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "firstMessage": {
+-          "name": "firstMessage",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "chatThread_user_idx": {
+-          "name": "chatThread_user_idx",
+-          "columns": [
+-            "userId"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "chatThread_userId_user_id_fk": {
+-          "name": "chatThread_userId_user_id_fk",
+-          "tableFrom": "chatThread",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "contentToSpace": {
+-      "name": "contentToSpace",
+-      "columns": {
+-        "contentId": {
+-          "name": "contentId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "spaceId": {
+-          "name": "spaceId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "contentToSpace_contentId_storedContent_id_fk": {
+-          "name": "contentToSpace_contentId_storedContent_id_fk",
+-          "tableFrom": "contentToSpace",
+-          "tableTo": "storedContent",
+-          "columnsFrom": [
+-            "contentId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        },
+-        "contentToSpace_spaceId_space_id_fk": {
+-          "name": "contentToSpace_spaceId_space_id_fk",
+-          "tableFrom": "contentToSpace",
+-          "tableTo": "space",
+-          "columnsFrom": [
+-            "spaceId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "contentToSpace_contentId_spaceId_pk": {
+-          "columns": [
+-            "contentId",
+-            "spaceId"
+-          ],
+-          "name": "contentToSpace_contentId_spaceId_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "session": {
+-      "name": "session",
+-      "columns": {
+-        "sessionToken": {
+-          "name": "sessionToken",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userId": {
+-          "name": "userId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "expires": {
+-          "name": "expires",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "session_userId_user_id_fk": {
+-          "name": "session_userId_user_id_fk",
+-          "tableFrom": "session",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "userId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "space": {
+-      "name": "space",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "name": {
+-          "name": "name",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": "'none'"
+-        },
+-        "user": {
+-          "name": "user",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "createdAt": {
+-          "name": "createdAt",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "numItems": {
+-          "name": "numItems",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false,
+-          "default": 0
+-        }
+-      },
+-      "indexes": {
+-        "space_name_unique": {
+-          "name": "space_name_unique",
+-          "columns": [
+-            "name"
+-          ],
+-          "isUnique": true
+-        },
+-        "spaces_name_idx": {
+-          "name": "spaces_name_idx",
+-          "columns": [
+-            "name"
+-          ],
+-          "isUnique": false
+-        },
+-        "spaces_user_idx": {
+-          "name": "spaces_user_idx",
+-          "columns": [
+-            "user"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "space_user_user_id_fk": {
+-          "name": "space_user_user_id_fk",
+-          "tableFrom": "space",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "user"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "spacesAccess": {
+-      "name": "spacesAccess",
+-      "columns": {
+-        "spaceId": {
+-          "name": "spaceId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "userEmail": {
+-          "name": "userEmail",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {
+-        "spacesAccess_spaceId_space_id_fk": {
+-          "name": "spacesAccess_spaceId_space_id_fk",
+-          "tableFrom": "spacesAccess",
+-          "tableTo": "space",
+-          "columnsFrom": [
+-            "spaceId"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {
+-        "spacesAccess_spaceId_userEmail_pk": {
+-          "columns": [
+-            "spaceId",
+-            "userEmail"
+-          ],
+-          "name": "spacesAccess_spaceId_userEmail_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    },
+-    "storedContent": {
+-      "name": "storedContent",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "integer",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": true
+-        },
+-        "content": {
+-          "name": "content",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "title": {
+-          "name": "title",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "description": {
+-          "name": "description",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "url": {
+-          "name": "url",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "savedAt": {
+-          "name": "savedAt",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "baseUrl": {
+-          "name": "baseUrl",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "ogImage": {
+-          "name": "ogImage",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "type": {
+-          "name": "type",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false,
+-          "default": "'page'"
+-        },
+-        "image": {
+-          "name": "image",
+-          "type": "text(255)",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "user": {
+-          "name": "user",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "noteId": {
+-          "name": "noteId",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {
+-        "storedContent_baseUrl_unique": {
+-          "name": "storedContent_baseUrl_unique",
+-          "columns": [
+-            "baseUrl"
+-          ],
+-          "isUnique": true
+-        },
+-        "storedContent_url_idx": {
+-          "name": "storedContent_url_idx",
+-          "columns": [
+-            "url"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_savedAt_idx": {
+-          "name": "storedContent_savedAt_idx",
+-          "columns": [
+-            "savedAt"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_title_idx": {
+-          "name": "storedContent_title_idx",
+-          "columns": [
+-            "title"
+-          ],
+-          "isUnique": false
+-        },
+-        "storedContent_user_idx": {
+-          "name": "storedContent_user_idx",
+-          "columns": [
+-            "user"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {
+-        "storedContent_user_user_id_fk": {
+-          "name": "storedContent_user_user_id_fk",
+-          "tableFrom": "storedContent",
+-          "tableTo": "user",
+-          "columnsFrom": [
+-            "user"
+-          ],
+-          "columnsTo": [
+-            "id"
+-          ],
+-          "onDelete": "cascade",
+-          "onUpdate": "no action"
+-        }
+-      },
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "user": {
+-      "name": "user",
+-      "columns": {
+-        "id": {
+-          "name": "id",
+-          "type": "text",
+-          "primaryKey": true,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "name": {
+-          "name": "name",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "email": {
+-          "name": "email",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "emailVerified": {
+-          "name": "emailVerified",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "image": {
+-          "name": "image",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "telegramId": {
+-          "name": "telegramId",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false
+-        },
+-        "hasOnboarded": {
+-          "name": "hasOnboarded",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": false,
+-          "autoincrement": false,
+-          "default": false
+-        }
+-      },
+-      "indexes": {
+-        "users_email_idx": {
+-          "name": "users_email_idx",
+-          "columns": [
+-            "email"
+-          ],
+-          "isUnique": false
+-        },
+-        "users_telegram_idx": {
+-          "name": "users_telegram_idx",
+-          "columns": [
+-            "telegramId"
+-          ],
+-          "isUnique": false
+-        },
+-        "users_id_idx": {
+-          "name": "users_id_idx",
+-          "columns": [
+-            "id"
+-          ],
+-          "isUnique": false
+-        }
+-      },
+-      "foreignKeys": {},
+-      "compositePrimaryKeys": {},
+-      "uniqueConstraints": {}
+-    },
+-    "verificationToken": {
+-      "name": "verificationToken",
+-      "columns": {
+-        "identifier": {
+-          "name": "identifier",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "token": {
+-          "name": "token",
+-          "type": "text",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        },
+-        "expires": {
+-          "name": "expires",
+-          "type": "integer",
+-          "primaryKey": false,
+-          "notNull": true,
+-          "autoincrement": false
+-        }
+-      },
+-      "indexes": {},
+-      "foreignKeys": {},
+-      "compositePrimaryKeys": {
+-        "verificationToken_identifier_token_pk": {
+-          "columns": [
+-            "identifier",
+-            "token"
+-          ],
+-          "name": "verificationToken_identifier_token_pk"
+-        }
+-      },
+-      "uniqueConstraints": {}
+-    }
+-  },
+-  "enums": {},
+-  "_meta": {
+-    "schemas": {},
+-    "tables": {},
+-    "columns": {}
+-  }
+-}
+\ No newline at end of file
+diff --git a/apps/web/migrations/meta/_journal.json b/apps/web/migrations/meta/_journal.json
+index ba09e75..d79e260 100644
+--- a/apps/web/migrations/meta/_journal.json
++++ b/apps/web/migrations/meta/_journal.json
+@@ -1,20 +1,13 @@
+ {
+-  "version": "6",
+-  "dialect": "sqlite",
+-  "entries": [
+-    {
+-      "idx": 0,
+-      "version": "6",
+-      "when": 1721746132570,
+-      "tag": "0000_silky_havok",
+-      "breakpoints": true
+-    },
+-    {
+-      "idx": 1,
+-      "version": "6",
+-      "when": 1721775651258,
+-      "tag": "0001_dear_sally_floyd",
+-      "breakpoints": true
+-    }
+-  ]
+-}
+\ No newline at end of file
++	"version": "6",
++	"dialect": "sqlite",
++	"entries": [
++		{
++			"idx": 0,
++			"version": "6",
++			"when": 1721946710900,
++			"tag": "0000_steep_moira_mactaggert",
++			"breakpoints": true
++		}
++	]
++}
+diff --git a/apps/web/server/db/index.ts b/apps/web/server/db/index.ts
+index 4d671be..a9ec910 100644
+--- a/apps/web/server/db/index.ts
++++ b/apps/web/server/db/index.ts
+@@ -2,4 +2,7 @@ import { drizzle } from "drizzle-orm/d1";
+ 
+ import * as schema from "./schema";
+ 
+-export const db = drizzle(process.env.DATABASE, { schema, logger: true });
++export const db = drizzle(process.env.DATABASE, {
++	schema,
++	logger: process.env.NODE_ENV === "development",
++});
+diff --git a/apps/web/server/db/schema.ts b/apps/web/server/db/schema.ts
+index 8486c78..32b8071 100644
+--- a/apps/web/server/db/schema.ts
++++ b/apps/web/server/db/schema.ts
+@@ -1,3 +1,4 @@
++import { create } from "domain";
+ import { relations, sql } from "drizzle-orm";
+ import {
+ 	index,
+@@ -211,6 +212,9 @@ export const chatHistory = createTable(
+ 		answer: text("answerParts"), // Single answer part as string
+ 		answerSources: text("answerSources"), // JSON stringified array of objects
+ 		answerJustification: text("answerJustification"),
++		createdAt: int("createdAt", { mode: "timestamp" })
++			.notNull()
++			.default(new Date()),
+ 	},
+ 	(history) => ({
+ 		threadIdx: index("chatHistory_thread_idx").on(history.threadId),
+diff --git a/apps/web/wrangler.toml b/apps/web/wrangler.toml
+index 8f4c75d..0240fa6 100644
+--- a/apps/web/wrangler.toml
++++ b/apps/web/wrangler.toml
+@@ -3,6 +3,20 @@ compatibility_date = "2024-03-29"
+ compatibility_flags = [ "nodejs_compat" ]
+ pages_build_output_dir = ".vercel/output/static"
+ 
++
++kv_namespaces = [
++	{ binding = "CANVAS_SNAPS", id = "6df98c892b3744ccb0c631d9f60d6697" },
++	{ binding = "RECOMMENDATIONS", id = "83bc7055226c4657948141c2ff9a5425" }
++]
++
++env.production.kv_namespaces = [
++	{ binding = "CANVAS_SNAPS", id = "6df98c892b3744ccb0c631d9f60d6697" },
++	{ binding = "RECOMMENDATIONS", id = "83bc7055226c4657948141c2ff9a5425" }
++]
++
++[ai]
++binding = "AI"
++
+ [placement]
+ mode = "smart"
+ 
+@@ -12,26 +26,22 @@ bucket_name = "dev-r2-anycontext"
+ 
+ [[d1_databases]]
+ binding = "DATABASE"
+-database_name = "dev-d1-anycontext"
+-database_id = "fc562605-157a-4f60-b439-2a24ffed5b4c"
+-
+-[[kv_namespaces]]
+-binding = "CANVAS_SNAPS"
+-id = "c6446f7190dd4afebe1c318df3400518"
++database_name = "database1"
++database_id = "11d5ccd9-c51c-4519-b9fa-2dc38110fd93"
+ 
+-[[kv_namespaces]]
+-binding = "RECOMMENDATIONS"
+-id = "83bc7055226c4657948141c2ff9a5425"
+ 
+ [[env.production.d1_databases]]
+ binding = "DATABASE"
+ database_name = "prod-d1-supermemory"
+ database_id = "f527a727-c472-41d4-8eaf-3d7ba0f2f395"
+ 
++[env.preview.ai]
++binding = "AI"
++
+ [[env.preview.d1_databases]]
+ binding = "DATABASE"
+ database_name = "dev-d1-anycontext"
+ database_id = "fc562605-157a-4f60-b439-2a24ffed5b4c"
+ 
+-[ai]
++[env.production.ai]
+ binding = "AI"
+\ No newline at end of file
+diff --git a/bun.lockb b/bun.lockb
+new file mode 100755
+index 0000000..bec0066
+Binary files /dev/null and b/bun.lockb differ
+diff --git a/package.json b/package.json
+index 5a11d36..5848d6e 100644
+--- a/package.json
++++ b/package.json
+@@ -29,7 +29,7 @@
+ 		"readline-sync": "^1.4.10",
+ 		"tailwindcss": "^3.4.3",
+ 		"tailwindcss-animate": "^1.0.7",
+-		"turbo": "2.0.3",
++		"turbo": "^2.0.3",
+ 		"vercel": "^34.2.0"
+ 	},
+ 	"engines": {
+diff --git a/packages/ui/types.d.ts b/packages/ui/types.d.ts
+index 5783313..51b0457 100644
+--- a/packages/ui/types.d.ts
++++ b/packages/ui/types.d.ts
+@@ -1,4 +1,4 @@
+ declare module "*.svg" {
+-  const content: React.FunctionComponent<React.SVGAttributes<SVGElement>>;
+-  export default content;
+-}
+\ No newline at end of file
++	const content: React.FunctionComponent<React.SVGAttributes<SVGElement>>;
++	export default content;
++}
